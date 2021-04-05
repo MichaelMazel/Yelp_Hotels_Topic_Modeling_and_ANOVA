@@ -1,0 +1,670 @@
+---
+title: "Yelp_Hotels_Topic_Modeling_and_ANOVA"
+author: "Michael Mazel"
+date: "2/19/2021"
+output: html_document
+---
+Resources:
+https://github.com/wesslen/text-analysis-org-science  
+https://juliasilge.com/blog/evaluating-stm/
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(R.utils)
+library(rjson)
+library(plyr)
+library(dplyr) 
+library(tidyverse)
+library(stringr)
+```
+
+# Importing and Filtering for Only Hotels  
+
+The comments below show the original import method for the Yelp Review and Yelp Business files. We also filtered for reviews by the hotel category. This reduced the number of reviews from 8mil to 400k. A local copy was then saved for ease of time, as the importing steps can take awhile.
+```{r}
+#tr.business <- "your_path_here//yelp_academic_dataset_business.json"
+#con <- file(tr.business, "r")
+#input <- readLines(con, -1L)
+#close(con)
+#tr.business <- ldply(lapply(input, function(x) t(unlist(fromJSON(x)))))
+#save(tr.business, file= 'tr.business')
+
+#tr.review <- "your_path_here///yelp_academic_dataset_review.json"
+#con <- file(tr.review, "r")
+#input <- readLines(con, -1L)
+#close(con)
+#tr.review <- ldply(lapply(input, function(x) t(unlist(fromJSON(x)))))
+#save(tr.review, file= 'tr.review.rdata')
+
+#hotels <- merge(x = tr.business, y = tr.review)
+#hotels <- hotels[str_detect(hotels$categories, regex("hotel", ignore_case = TRUE)), ]
+#write.csv(hotels, file="hotels")
+
+hotels_raw <- read.csv(file.choose(),header = TRUE)
+```
+
+Eliminate clutter variables. Keep business name, text (aka review), stars, categories, city, state, date. Then, shuffle the rows.
+```{r}
+hotel_all <- hotels_raw %>% dplyr::select(3, 66, 19, 62, 5, 6, 67)
+
+set.seed(123)
+hotel_all <- hotel_all[sample(nrow(hotel_all)), ]
+```
+
+We suspect that we can remove anything that does not include the exact subcategory "Hotels". For example, remove a row if the category does not contain "Hotels" but it contains "Hotels & Travel". The code below shows what column we believe we can remove
+```{r}
+hotel_all %>% filter(str_detect(hotel_all$categories, regex(", Hotels,", ignore_case = TRUE)) == F) %>% distinct(name) %>% head(50)
+```
+
+This method successfully filters out non-hotels. Due to the commas in ", Hotels,", if "Hotels" is in the first or last position in the category list, we would lose it. The code below fixes this issue and captures all three of the potential positions.
+```{r}
+str_end <- hotel_all[str_detect(str_sub(hotel_all$categories,-8,-1), regex(", Hotels", ignore_case = TRUE)), ]
+str_beg <- hotel_all[str_detect(str_sub(hotel_all$categories,1,7), regex("Hotels,", ignore_case = TRUE)), ]
+str_mid <- hotel_all[str_detect(hotel_all$categories, regex(", Hotels,", ignore_case = TRUE)), ]
+hotel_all <- dplyr::union(str_beg,str_mid)
+hotel_all <- dplyr::union(hotel_all,str_end)
+```
+
+Further investigation of categories and names we suspect we can filter out
+```{r}
+hotel_all[str_detect(hotel_all$categories, regex("Bus Tours", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$categories, regex("Steakhouses", ignore_case = TRUE)), ] %>% distinct(name)
+
+hotel_all[str_detect(hotel_all$name, regex("Gourmet", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Bingo", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Cantina", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Pub", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Buffet", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Steak", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Seafood", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Grill", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Cafe", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Coffee", ignore_case = TRUE)), ] %>% distinct(name)
+hotel_all[str_detect(hotel_all$name, regex("Restaurant", ignore_case = TRUE)), ] %>% distinct(name)
+```
+The previous chunk does not include any actual Hotels, except when we filter categories by Steakhouses. We will remove the others from our dataframe.
+```{r}
+hotel_all <- hotel_all[!str_detect(hotel_all$categories, regex("Bus Tours", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Gourmet", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Bingo", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Cantina", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Pub", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Buffet", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Steak", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Seafood", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Grill", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Cafe", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Coffee", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$name, regex("Restaurant", ignore_case = TRUE)), ]
+```
+
+Look for sentences in the reviews that mention "Airbnb". If a large proportion says they booked their stay through Airbnb, we will remove.
+```{r}
+temp <- unlist(strsplit(hotel_all$text, "\\."))
+temp[grep(pattern = "air bnb", temp, ignore.case = T)] %>% head(25)
+temp[grep(pattern = "airbnb", temp, ignore.case = T)] %>% head(25)
+```
+It is a close split between reviews that reveal they booked through Airbnb and reviews that simply mention Airbnb (e.g. "Snag a nearby Airbnb instead"). We would have to investigate reviews case by case to confidently remove only Airbnb bookings. We will check how many reviews mention Airbnb and go from there. 
+```{r}
+hotel_all[str_detect(hotel_all$text, regex("airbnb", ignore_case = TRUE)), ] %>% count()/255747 * 100
+hotel_all[str_detect(hotel_all$text, regex("air bnb", ignore_case = TRUE)), ] %>% count()/255747 * 100
+```
+
+Less than .1 percent of reviews mention Airbnbs in some way. We can remove all of these cases without worrying about an impact on our computations.
+```{r}
+hotel_all <- hotel_all[!str_detect(hotel_all$text, regex("airbnb", ignore_case = TRUE)), ]
+hotel_all <- hotel_all[!str_detect(hotel_all$text, regex("air bnb", ignore_case = TRUE)), ]
+```
+
+
+
+
+# Data Exploration  
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(quanteda)
+library(RColorBrewer)
+```
+
+```{r}
+hotel_all <- hotel_all %>% mutate(year = as.integer(substring(hotel_all$date,1,4)))
+hotel_all %>% group_by(year) %>% ggplot(data = hotel_all, mapping = aes(x = year)) + geom_histogram() +
+  labs(y = "Review Count", title ="Number of Hotel Reviews on Yelp by Year") +
+  theme_clean()
+```
+
+The Flesch–Kincaid readability tests are readability tests designed to indicate how easily a passage is understood. The higher the score, the more easier to understand. We will also look at the length of reviews, according to the number of words. We will use a random sample of our data for most analyses in order for them to run faster.
+```{r}
+set.seed(123)
+hotel_sample <- hotel_all[sample(nrow(hotel_all), size = 2500), ]
+
+readability <- textstat_readability(hotel_sample$text)
+
+hist(readability$Flesch, xlim = c(0, 100),breaks = 200, xlab = "Flesch-Kincaid Score", main = "Flesch-Kincaid Scores for Hotel Reviews on Yelp")
+hist(ntoken(hotel_sample$text), breaks = 100, main = "Words per Hotel Review", xlab = "Number of Words")
+```
+
+View reviews with less than 10 words.
+```{r}
+hotel_sample$text[which(ntoken(hotel_sample$text) < 10)]
+```
+No reviews returned.  
+
+Check out possible covariate(s). We believe hotel experiences/expectations are likely impacted by region. The Yelp Documentation FAQs informed us that there are 10 metropolitan areas in the dataset: Montreal, Calgary, Toronto, Pittsburgh, Charlotte, Urbana-Champaign, Phoenix, Las Vegas, Madison, and Cleveland
+```{r}
+hotel_all %>% group_by(state) %>% summarise(Count = n()) %>% arrange(desc(Count))
+hotel_all %>% group_by(city) %>% summarise(Count = n()) %>% arrange(desc(Count))
+```
+
+13 states were returned for 10 cities. We know SC will belong to Charlotte, in addition to NC. Let's investigate the cities from NY and VT.
+```{r}
+hotel_all %>% filter(state=="NY") %>% group_by(city) %>% summarise(Count = n()) %>% arrange(desc(Count))
+hotel_all %>% filter(state=="VT") %>% group_by(city) %>% summarise(Count = n()) %>% arrange(desc(Count))
+```
+
+Update the full and sample dataframes.
+```{r}
+hotel_all$region[hotel_all$state %in% c("NV")] <- "Las Vegas"
+hotel_all$region[hotel_all$state %in% c("AZ")] <- "Phoenix"
+hotel_all$region[hotel_all$state %in% c("PA")] <- "Pittsburgh"
+hotel_all$region[hotel_all$state %in% c("OH")] <- "Cleveland"
+hotel_all$region[hotel_all$state %in% c("WI")] <- "Madison"
+hotel_all$region[hotel_all$state %in% c("IL")] <- "Urbana"
+hotel_all$region[hotel_all$state %in% c("NC","SC")] <- "Charlotte"
+hotel_all$region[hotel_all$state %in% c("ON")] <- "Toronto"
+hotel_all$region[hotel_all$state %in% c("QC","VT","NY")] <- "Montreal"
+hotel_all$region[hotel_all$state %in% c("AB")] <- "Calgary"
+
+hotel_sample$region[hotel_sample$state %in% c("NV")] <- "Las Vegas"
+hotel_sample$region[hotel_sample$state %in% c("AZ")] <- "Phoenix"
+hotel_sample$region[hotel_sample$state %in% c("PA")] <- "Pittsburgh"
+hotel_sample$region[hotel_sample$state %in% c("OH")] <- "Cleveland"
+hotel_sample$region[hotel_sample$state %in% c("WI")] <- "Madison"
+hotel_sample$region[hotel_sample$state %in% c("IL")] <- "Urbana"
+hotel_sample$region[hotel_sample$state %in% c("NC","SC")] <- "Charlotte"
+hotel_sample$region[hotel_sample$state %in% c("ON")] <- "Toronto"
+hotel_sample$region[hotel_sample$state %in% c("QC","VT","NY")] <- "Montreal"
+hotel_sample$region[hotel_sample$state %in% c("AB")] <- "Calgary"
+
+
+table(hotel_all$region)
+```
+
+Create a corpus and add region as a covariate.
+```{r}
+text <- hotel_sample$text
+
+myCorpus <- corpus(text)
+
+docvars(myCorpus, "region") <- hotel_sample$region
+```
+
+
+Create a Document-Feature Matrix (DFM) and find the top 50 words.
+```{r}
+dfm <- dfm(myCorpus, remove = c(stopwords("english")), ngrams = 1L, stem = F, remove_numbers = T, remove_punct = T, remove_symbols = T, remove_hyphens = F)
+
+topfeatures(dfm, 50)
+```
+We will repeat the previous step but remove additional general words and hotel specific words that are not descriptive.
+```{r}
+extra.stop <- c("always", "will", "can", "us", "get", "also", "much", "way", "things", "one", "make", "really", "just", "take", "lot", "even", "done", "something", "go", "sure", "makes", "every", "come", "say", "many", "often", "see", "want", "though", "without", "going", "takes", "someone", "however", "comes", "usually", "may", "thing", "making", "along", "since", "back", "similar", "goes", "put", "getting", "keep", "related", "else", "now", "seems", "hotel", "stay", "place", "room", "rooms", "stayed", "u", "didnt","got", "next", "definitely")
+
+dfm <- dfm(myCorpus, remove = c(stopwords("english"), extra.stop), ngrams = 1L, stem = F, remove_numbers = T, remove_punct = T, remove_symbols = T, remove_hyphens = F)
+
+dfm <- dfm_trim(dfm, min_docfreq = 2)
+
+topfeatures(dfm, 50)
+```
+Word Clouds:
+```{r}
+textplot_wordcloud(dfm, scale = c(3.5, 0.75), colors = brewer.pal(8, "Dark2"), random.order = F, rot.per = 0.1, max.words = 100)
+```
+   
+       
+For a word cloud divided by region, we will view major US cities.
+```{r}
+US_hotel_sample <- hotel_sample %>% filter(region %in% c("Charlotte","Cleveland","Las Vegas","Phoenix","Pittsburgh"))
+text2 <- US_hotel_sample$text
+myCorpus2 <- corpus(text2)
+docvars(myCorpus2, "region") <- US_hotel_sample$region
+
+cdfm2 <- dfm(myCorpus2, group = "region", remove = c(stopwords("english"), extra.stop), stem = F, remove_numbers = T, remove_punct = T, remove_symbols = T, remove_hyphens = F)
+
+textplot_wordcloud(cdfm2, comparison = T, scale = c(3.5, 0.75), colors = brewer.pal(8, "Dark2"), random.order = F, rot.per = 0.1, max.words = 100)
+```
+
+Words that commonly appear together:
+```{r}
+wordDfm <- dfm_sort(dfm_weight(dfm, "frequency"))
+wordDfm <- t(wordDfm)[1:50, ]
+wordDistMat <- dist(wordDfm)
+wordCluster <- hclust(wordDistMat)
+plot(wordCluster, xlab = "", main = "Raw Frequency weighting")
+```
+      
+  
+Same code as above except we use "TF-IDF weighting". This reduces the weight of words that occur very frequently (e.g. great) or very infrequently.
+```{r}
+wordDfm <- dfm_sort(dfm_weight(dfm, "tfidf"))
+wordDfm <- t(wordDfm)[1:50, ]
+wordDistMat <- dist(wordDfm)
+wordCluster <- hclust(wordDistMat)
+plot(wordCluster, xlab = "", main = "TF-IDF weighting")
+```
+
+   
+
+
+
+
+# Structural Topic Modeling without Covariates  
+
+```{r}
+library(stm)
+```
+
+To use stm, we first need to convert to the appropriate data structure. Then, view a plot to help determine how many times a word needs to occur in order to keep it in our analysis
+```{r}
+stmdfm <- convert(dfm, to = "stm", docvars = docvars(myCorpus))
+plotRemoved(stmdfm$documents, lower.thresh = seq(1, 80, by = 20))
+```
+
+We will keep words that appear at least 3 times
+```{r}
+out <- prepDocuments(stmdfm$documents, stmdfm$vocab, stmdfm$meta, lower.thresh = 3)
+```
+
+Choosing the optimal number of topics.
+```{r}
+K <- c(5, 10, 15, 25, 50)
+kresult <- searchK(out$documents, out$vocab, K, data = out$meta, max.em.its = 15, init.type = "Spectral")
+```
+
+```{r}
+plot(kresult)
+```
+       
+   
+The held-out-likelihood, which is the predictive strength per model on an out-of-sample dataset, is highest in the 5-10 range, and the residuals are lowest in the 15-50 range. Semantic coherence is large when the probability of words in a select topic frequently co-occur, and we can see it's also high in the 5-10 range. We will select 10 as our number of topics.  
+
+Run the baseline model (without covariates)
+```{r}
+k <- 10
+
+stmFit <- stm(out$documents, out$vocab, K = k, max.em.its = 15, data = out$meta, init.type = "Spectral", seed = 123)
+```
+View the different topics:
+```{r}
+plot(stmFit, type = "summary", n = 5, main = "Survey Topics", text.cex = 1)
+```
+```{r}
+topic <- data.frame(topicnames = paste0("Topic ", 1:k), TopicNumber = 1:k, TopicProportions = colMeans(stmFit$theta))
+
+topicNames <- labelTopics(stmFit)
+```
+
+We will identify the FREX weight words: FR-equently occurring and mostly EX-clusive for its topic.
+```{r}
+par(mfrow = c(3, 2), mar = c(1, 1, 2, 1))
+for (i in 1:k) {
+    plot(stmFit, type = "labels", n = 20, topics = i, main = "Raw Probabilities", 
+        width = 40)
+    plot(stmFit, type = "labels", n = 20, topics = i, main = "FREX Weights", labeltype = "frex", 
+        width = 50)
+}
+```
+
+Plot semantic coherence and exclusivity. Semantic coherence is essentially interpretability. The scores may be low if a topic contains multiple subtopics. Exclusivity measures how unique words are to that topic. The most favorable tends to be in the top right.
+```{r}
+topicQuality(stmFit, documents = out$documents)
+```
+
+Topic Correlations
+```{r}
+library(igraph)
+library(visNetwork)
+```
+
+```{r}
+threshold <- 0.1
+
+cormat <- cor(stmFit$theta)
+adjmat <- ifelse(abs(cormat) > threshold, 1, 0)
+
+links2 <- as.matrix(adjmat)
+net2 <- graph_from_adjacency_matrix(links2, mode = "undirected")
+net2 <- igraph::simplify(net2, remove.multiple = FALSE, remove.loops = TRUE)
+
+data <- toVisNetworkData(net2)
+
+nodes <- data[[1]]
+edges <- data[[2]]
+```
+This code detects clusters (or communities) within the network.
+```{r}
+clp <- cluster_label_prop(net2)
+nodes$community <- clp$membership
+qual_col_pals = RColorBrewer::brewer.pal.info[RColorBrewer::brewer.pal.info$category == 
+    "qual", ]
+col_vector = unlist(mapply(RColorBrewer::brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+col_vector <- c(col_vector, col_vector)
+
+col <- col_vector[nodes$community + 1]
+
+links <- igraph::as_data_frame(net2, what = "edges")
+nodes <- igraph::as_data_frame(net2, what = "vertices")
+```
+Specify parameters on the network like shape, title, label, size and borderwidth.
+```{r}
+TopicProportions = colMeans(stmFit$theta)
+
+# visNetwork preferences
+nodes$shape <- "dot"
+nodes$shadow <- TRUE  # Nodes will drop shadow
+nodes$title <- topic$topicnames  # Text on click
+nodes$label <- topic$topicnames  # Node label
+nodes$size <- (TopicProportions/max(TopicProportions)) * 40  # Node size
+nodes$borderWidth <- 2  # Node border width
+
+nodes$color.background <- col
+nodes$color.border <- "black"
+nodes$color.highlight.background <- "orange"
+nodes$color.highlight.border <- "darkred"
+nodes$id <- 1:nrow(nodes)
+```
+
+```{r}
+visNetwork(nodes, links, width = "100%", height = "600px", main = "Topic Correlations")
+```
+
+
+
+
+
+
+
+
+
+# Structural Topic Modeling with Covariates
+
+```{r}
+stmdfm <- convert(dfm, to = "stm", docvars = docvars(myCorpus))
+
+plotRemoved(stmdfm$documents, lower.thresh = seq(1, 80, by = 20))
+```
+
+```{r}
+out <- prepDocuments(stmdfm$documents, stmdfm$vocab, stmdfm$meta, lower.thresh = 3)
+```
+
+Choosing the optimal number of topics.
+```{r}
+K <- c(5, 10, 15, 25, 50)
+kresult <- searchK(out$documents, out$vocab, K, data = out$meta, prevalence = ~region, max.em.its = 15, init.type = "Spectral")
+```
+```{r}
+plot(kresult)
+```
+
+The optimal number of topics appear to be 10.
+```{r}
+k <- 10
+
+stmFit <- stm(out$documents, out$vocab, K = k, prevalence = ~region, max.em.its = 15, data = out$meta, init.type = "Spectral", seed = 123)
+```
+
+```{r}
+plot(stmFit, type = "summary", xlim = c(0, 0.8), ylim = c(0.4, k + 0.4), n = 5, main = "Survey Topics", width = 10, text.cex = 1)
+```
+```{r}
+topic <- data.frame(topicnames = paste0("Topic ", 1:k), TopicNumber = 1:k, TopicProportions = colMeans(stmFit$theta))
+
+topicNames <- labelTopics(stmFit)
+```
+
+```{r}
+par(mfrow = c(3, 2), mar = c(1, 1, 2, 1))
+for (i in 1:k) {
+    plot(stmFit, type = "labels", n = 25, topics = i, main = "Raw Probabilities", 
+        width = 40)
+    plot(stmFit, type = "labels", n = 25, topics = i, main = "FREX Weights", labeltype = "frex", 
+        width = 50)
+}
+```
+
+Let's see the most representative review for the food category. It may entirely be about a restaurant inside a Hotel. 
+```{r}
+shortdoc <- substr(text, 1, 800)
+findThoughts(stmFit, texts = shortdoc, n = 5, topics = 9)
+```
+
+Rename the topics based off our best attempt to summarize the FREX weights.
+```{r}
+topicNames <- labelTopics(stmFit)
+topic <- data.frame(topicnames = c("Transactions", "Events", "Vegas Casinos", "Convenience", "Discrepancies", "Las Vegas", "Pleasant Experience", "Room Features", "Food","Complaints"), TopicNumber = 1:k, TopicProportions = colMeans(stmFit$theta), stringsAsFactors = F)
+```
+
+Plot semantic coherence and exclusivity.
+```{r}
+topicQuality(stmFit, documents = out$documents)
+```
+
+Find how similar words are between two topics. We will compare similar topics (i.e. Discrepancies vs Complaints, and Convenience vs Pleasant Experience)
+```{r}
+plot(stmFit, type = "perspectives", topics = c(5, 10))
+plot(stmFit, type = "perspectives", topics = c(4, 7))
+```
+      
+   
+Topic Correlations
+```{r}
+threshold <- 0.1
+
+cormat <- cor(stmFit$theta)
+adjmat <- ifelse(abs(cormat) > threshold, 1, 0)
+
+links2 <- as.matrix(adjmat)
+net2 <- graph_from_adjacency_matrix(links2, mode = "undirected")
+net2 <- igraph::simplify(net2, remove.multiple = FALSE, remove.loops = TRUE)
+
+data <- toVisNetworkData(net2)
+
+nodes <- data[[1]]
+edges <- data[[2]]
+```
+This code detects clusters (or communities) within the network.
+```{r}
+clp <- cluster_label_prop(net2)
+nodes$community <- clp$membership
+qual_col_pals = RColorBrewer::brewer.pal.info[RColorBrewer::brewer.pal.info$category == 
+    "qual", ]
+col_vector = unlist(mapply(RColorBrewer::brewer.pal, qual_col_pals$maxcolors, rownames(qual_col_pals)))
+col_vector <- c(col_vector, col_vector)
+
+col <- col_vector[nodes$community + 1]
+
+links <- igraph::as_data_frame(net2, what = "edges")
+nodes <- igraph::as_data_frame(net2, what = "vertices")
+```
+Specify parameters on the network like shape, title, label, size and borderwidth.
+```{r}
+TopicProportions = colMeans(stmFit$theta)
+
+# visNetwork preferences
+nodes$shape <- "dot"
+nodes$shadow <- TRUE  # Nodes will drop shadow
+nodes$title <- topic$topicnames  # Text on click
+nodes$label <- topic$topicnames  # Node label
+nodes$size <- (TopicProportions/max(TopicProportions)) * 40  # Node size
+nodes$borderWidth <- 2  # Node border width
+
+nodes$color.background <- col
+nodes$color.border <- "black"
+nodes$color.highlight.background <- "orange"
+nodes$color.highlight.border <- "darkred"
+nodes$id <- 1:nrow(nodes)
+```
+
+```{r}
+visNetwork(nodes, links, width = "100%", height = "600px", main = "Topic Correlations")
+```
+
+
+
+
+
+
+
+
+# Test for Ratings Change Over Time, Based off Airbnb's Influence in the Market
+
+```{r}
+library(multcomp)
+```
+
+We are estimating Airbnb's presence in the market based off the technology adoption life cycle. The first group will be pre-airbnb, innovators, and early adopters lumped together under the title "early adopters", followed by early majority, late majority, and laggards. To determine exactly where to split the time into chunks, we referred to several sources. The first of which, was using Google Trends to see interest in "Airbnb" within the U.S. We then referred to https://www.businessofapps.com/data/airbnb-statistics/ for airbnb's change in revenue, number of users, bookings, and listings. In the code below, we filtered the original dataset for reviews that mention airbnb.
+```{r}
+airbnb <- hotels_raw %>% mutate(year = as.integer(substring(hotels_raw$date,1,4)))
+airbnb <- airbnb %>% filter(grepl("airbnb",text,ignore.case = T) | grepl("air bnb",text,ignore.case = T))
+airbnb %>% group_by(year) %>% ggplot(data = airbnb, mapping = aes(x = year)) + geom_histogram() + labs(y = "Count", x = "Year", title ="Number of Yelp Reviews that Mention Airbnb") + theme_clean()
+```
+
+```{r}
+hotel_sample$cohort <- "Early Adopters"
+hotel_sample$cohort[hotel_sample$year >= 2015 & hotel_sample$year <= 2016] <- "Early Majority"
+hotel_sample$cohort[hotel_sample$year == 2017] <- "Late Majority"
+hotel_sample$cohort[hotel_sample$year >= 2018] <- "Laggards"
+hotel_sample$cohort <- as.factor(hotel_sample$cohort)
+```
+
+First, let's check out a histogram for ratings, separated by cohort.
+```{r}
+ggplot(hotel_sample, aes(x = stars.y, fill = cohort)) + geom_histogram() +
+  labs(x = "stars") + facet_wrap(~cohort)
+```
+     
+  
+For each topic of interest, we will filter the dataset using the topic's FREX weight words. Then, we will create histograms as a check for our assumptions. ANOVA is robust to violations of normality, given sufficient sample size. As long as our data isn't too skewed, we will be safe to proceed. A boxplot to analyze variance is troublesome with only 5 unique x values (1-5 stars). Therefore, we will also use histograms to check for variance. If our assumptions appear to be met, we will perform an ANOVA to test for any difference in ratings across the time periods. If the ANOVA result is significant, refer to the multiple comparisons of means portion, in which we determine the specific time periods that produce a difference that is statistically significant. We expect several to return significant due to the large sample size, so we will use Cohen's D to measure the effect size.   
+
+Our topics of interest include those that we believe would be impacted by Airbnb's influence on the market. We do not believe ratings would be significantly different for topics like "complaints". Topics such as "Room Features" better resemble where we predict a change in ratings. We also excluded FREX words that have inherently strong ties with ratings (e.g. "pleasant" would likely have very high correlation with 4-5 star ratings).   
+
+Topic 1 - Transactions
+```{r}
+# \\b is used to identify whole words (e.g. free, but not freeze)
+topic1 <- c("\\bfee\\b","\\bcar\\b","\\bvalet\\b","\\binternet\\b","\\bcharges\\b","\\bcheckout\\b","\\bservices\\b","\\bcost\\b","\\bplatinum\\b","\\bbooking\\b")
+topic <- topic1
+
+hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)) %>% ggplot(aes(x = stars.y, fill = cohort)) + geom_histogram() + labs(x = "stars") + facet_wrap(~cohort)
+
+fit <- aov(stars.y ~ cohort, data = hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)))
+summary(fit)
+
+gfit <- glht(fit, linfct = mcp("cohort" = "Tukey"))
+summary(gfit, test = adjusted("bonferroni"))
+```
+
+Calculate effect size(s) using Cohen's D for Topic 1
+```{r}
+# Laggards - Early Adopters:
+0.6069/sqrt(anova(fit)['Residuals', 'Mean Sq']) #the denominator retrieves the RMSE, aka the pooled standard deviation
+```
+
+
+Topic 2 - Events  
+  Note, this has the lowest semantic coherence/exclusivity out of all topics
+```{r}
+topic2 <- c("\\bwedding\\b","\\bbartender\\b","\\btournament\\b","\\bceremony\\b","\\bbride\\b","\\bid\\b","\\bcrab\\b","\\bweeks\\b","\\bmother\\b","\\bgirlfriend\\b")
+topic <- topic2
+
+hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)) %>% ggplot(aes(x = stars.y, fill = cohort)) + geom_histogram() + labs(x = "stars") + facet_wrap(~cohort)
+
+fit <- aov(stars.y ~ cohort, data = hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)))
+summary(fit)
+
+gfit <- glht(fit, linfct = mcp("cohort" = "Tukey"))
+summary(gfit, test = adjusted("bonferroni"))
+```
+
+Calculate effect size(s) using Cohen's D for Topic 2
+```{r}
+# Laggards - Early Adopters:
+0.73333/sqrt(anova(fit)['Residuals', 'Mean Sq'])
+```
+
+
+
+Topic 3 - Vegas Casinos
+```{r}
+topic3 <- c("\\bstrip\\b","\\bcasino\\b","\\bcasinos\\b","\\bshops\\b","\\bslots\\b","\\baction\\b","\\bslot\\b","\\bpoker\\b","\\btables\\b","\\bfremont\\b")
+topic <- topic3
+
+hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)) %>% ggplot(aes(x = stars.y, fill = cohort)) + geom_histogram() + labs(x = "stars") + facet_wrap(~cohort)
+
+fit <- aov(stars.y ~ cohort, data = hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)))
+summary(fit)
+
+gfit <- glht(fit, linfct = mcp("cohort" = "Tukey"))
+summary(gfit, test = adjusted("bonferroni"))
+```
+
+We failed to reject the null for the initial ANOVA test (p-value 0.0736) and cannot proceed for Topic 3.    
+
+
+
+Topic 4 - Convenience
+```{r}
+topic4 <- c("\\bbreakfast\\b","\\bshuttle\\b","\\blocation\\b","\\bairport\\b","\\bwifi\\b","\\bdowntown\\b","\\bstaff\\b","\\bstreet\\b","\\blobby\\b","\\bcomplimentary\\b")
+topic <- topic4
+
+hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)) %>% ggplot(aes(x = stars.y, fill = cohort)) + geom_histogram() + labs(x = "stars") + facet_wrap(~cohort)
+
+fit <- aov(stars.y ~ cohort, data = hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)))
+summary(fit)
+
+gfit <- glht(fit, linfct = mcp("cohort" = "Tukey"))
+summary(gfit, test = adjusted("bonferroni"))
+```
+
+Calculate effect size(s) using Cohen's D for Topic 4
+```{r}
+# Laggards - Early Adopters:
+0.36960/sqrt(anova(fit)['Residuals', 'Mean Sq'])
+```
+
+
+
+Topic 8 - Room Features
+```{r}
+topic8 <- c("\\belevator\\b","\\bice\\b","\\bmini\\b","\\bmirror\\b","\\bhallways\\b","\\bcouch\\b","\\btv\\b","\\bcable\\b","\\blights\\b","\\bdoors\\b")
+topic <- topic8
+
+hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)) %>% ggplot(aes(x = stars.y, fill = cohort)) + geom_histogram() + labs(x = "stars") + facet_wrap(~cohort)
+
+fit <- aov(stars.y ~ cohort, data = hotel_sample %>% filter(grepl(topic[1],text,ignore.case = T) | grepl(topic[2],text,ignore.case = T) | grepl(topic[3],text,ignore.case = T) | grepl(topic[4],text,ignore.case = T) | grepl(topic[5],text,ignore.case = T) | grepl(topic[6],text,ignore.case = T) | grepl(topic[7],text,ignore.case = T) | grepl(topic[8],text,ignore.case = T) | grepl(topic[9],text,ignore.case = T) | grepl(topic[10],text,ignore.case = T)))
+summary(fit)
+
+gfit <- glht(fit, linfct = mcp("cohort" = "Tukey"))
+summary(gfit, test = adjusted("bonferroni"))
+```
+
+Calculate effect size(s) using Cohen's D for Topic 8
+```{r}
+# Early Majority - Early Adopters:
+0.52747/sqrt(anova(fit)['Residuals', 'Mean Sq'])
+# Laggards - Early Adopters:
+0.61737/sqrt(anova(fit)['Residuals', 'Mean Sq'])
+# Late Majority - Early Adopters:
+0.63462 /sqrt(anova(fit)['Residuals', 'Mean Sq'])
+```
+
+
+Some Limitations:  
+-Vegas has such a large proportion of total reviews that the selected topics could be biased.  
+-We analyzed correlation, not causation of Airbnbs's influence. Other similar external factors that could have an impact include Airbnb rivals (e.g. Expedia Group, Tripadvisor, Bookings Holdings).  
+-There could also be a general shift in how users express their thoughts (e.g. users leave more polarizing reviews now compared to 10 years ago).
