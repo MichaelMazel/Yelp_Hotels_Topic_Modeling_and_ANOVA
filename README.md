@@ -47,7 +47,7 @@ The plot below shows how well the reviews could be clustered together according 
 
 ![Number_of_Topics](https://github.com/MichaelMazel/Yelp_Hotels_Topic_Modeling_and_ANOVA/blob/main/Yelp_Hotels_Topic_Modeling_and_ANOVA_files/figure-gfm/unnamed-chunk-43-1.png)  
 
-I renamed the ten topics in an attempt to best summarize each topic's top words. The topic names include "Transactions", "Events", "Vegas Casinos", "Convenience", "Discrepancies", "Las Vegas", "Pleasant Experience", "Room Features", "Food", and "Complaints". Below is a comparison of two seemingly similar topics, Discrepancies and Complaints.   
+I renamed the ten topics in an attempt to best summarize each topic's top words. The topic names include Transactions, Events, Vegas Casinos, Convenience, Discrepancies, Las Vegas, Pleasant Experience, Room Features, Food, and Complaints. Below is a comparison of two seemingly similar topics, Discrepancies and Complaints.   
 
 ![Comparison_of_Topics](https://github.com/MichaelMazel/Yelp_Hotels_Topic_Modeling_and_ANOVA/blob/main/Yelp_Hotels_Topic_Modeling_and_ANOVA_files/figure-gfm/unnamed-chunk-51-1.png)  
 
@@ -67,15 +67,14 @@ One benefit of structural topic modeling compared to Latent Dirichlet Allocation
 
 Now that we created the topics, I hypothesized that certain topics would have a change in stars (scale 1-5) that correlate to Airbnb's growing influence in the market. Some topics like "complaints", I did not expect a change, while others like "room features" I did. My theory was that there could be higher expectations for hotels now that Airbnb is offering a unique and potentially refreshing alternative. Alternatively, users may be appreciating hotels more due to some of their competitive advantages.  
 
-Below is the number of Yelp reviews that mention Airbnb each year. I used this as one of the methods to group reviews into time periods based off the Technology Adoption Life Cycle Theory. The groups include "Early Adopters" (which also include pre-Airbnb), "Early Majority","Late Majority", and "Laggards". After the chart of Airbnb reviews by year is the ratings distribution by each time period.      
+Below is the number of Yelp reviews that mention Airbnb each year. I used this as one of the methods to group reviews into time periods based off the Technology Adoption Life Cycle Theory. The groups include Early Adopters (which also include pre-Airbnb), Early Majority, Late Majority, and Laggards. The second graph below shows the stars distribution by each time period.      
 
 ![Airbnb_Mentions](https://github.com/MichaelMazel/Yelp_Hotels_Topic_Modeling_and_ANOVA/blob/main/Yelp_Hotels_Topic_Modeling_and_ANOVA_files/figure-gfm/unnamed-chunk-57-1.png)   
 ![Ratings_by_Time_Period](https://github.com/MichaelMazel/Yelp_Hotels_Topic_Modeling_and_ANOVA/blob/main/Yelp_Hotels_Topic_Modeling_and_ANOVA_files/figure-gfm/unnamed-chunk-59-1.png)   
 
 For topics of interest, I performed an ANOVA to test for a difference across the time periods. If it returned significant, I performed a multiple comparisons test (adjusted with Bonferroni) to identify which groups were different. Finally, I calculated Cohen's D to see if the effect size was meaningful.  
 
-The Transactions Topic included key words such as fee, internet, car, charges, checkout, and cost.
-Early Adopters in this topic left a review that was 0.61 stars higher on average compared to Laggards. The Early Adopters included reviews from 2014 and before, while Laggards included those from 2018 and after. The .61 difference in stars translates to a 0.48 Cohen's D, implying moderate effect size.
+The Transactions Topic included key words such as fee, internet, car, charges, checkout, and cost. Early Adopters in this topic left a review that was 0.61 stars higher on average compared to Laggards. The Early Adopters included reviews from 2014 and before, while Laggards included those from 2018 and after. The .61 difference in stars translates to a 0.48 Cohen's D, implying moderate effect size.
 
 The Convenience Topic included words such as breakfast, shuttle, location, staff, and lobby. Again, Early Adopters left a review significantly higher than Laggards. This difference was 0.37 stars which translates to a much smaller 0.27 Cohen's D.  
 
