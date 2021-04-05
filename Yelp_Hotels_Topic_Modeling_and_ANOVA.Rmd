@@ -2,11 +2,8 @@
 title: "Yelp_Hotels_Topic_Modeling_and_ANOVA"
 author: "Michael Mazel"
 date: "2/19/2021"
-output: html_document
+output: rmarkdown::github_document
 ---
-Resources:
-https://github.com/wesslen/text-analysis-org-science  
-https://juliasilge.com/blog/evaluating-stm/
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -19,6 +16,7 @@ library(plyr)
 library(dplyr) 
 library(tidyverse)
 library(stringr)
+library(webshot)
 ```
 
 # Importing and Filtering for Only Hotels  
@@ -291,7 +289,7 @@ plot(kresult)
 ```
        
    
-The held-out-likelihood, which is the predictive strength per model on an out-of-sample dataset, is highest in the 5-10 range, and the residuals are lowest in the 15-50 range. Semantic coherence is large when the probability of words in a select topic frequently co-occur, and we can see it's also high in the 5-10 range. We will select 10 as our number of topics.  
+The held-out-likelihood, which is the predictive strength per model on an out-of-sample dataset, is highest in the 5-15 range, and the residuals are lowest in the 15-50 range. Semantic coherence is large when the probability of words in a select topic frequently co-occur, and we can see it's also high in the 5-10 range. We will select 10 as our number of topics.  
 
 Run the baseline model (without covariates)
 ```{r}
@@ -380,6 +378,7 @@ nodes$id <- 1:nrow(nodes)
 ```
 
 ```{r}
+screenshot.force = TRUE
 visNetwork(nodes, links, width = "100%", height = "600px", main = "Topic Correlations")
 ```
 
@@ -512,6 +511,7 @@ nodes$id <- 1:nrow(nodes)
 ```
 
 ```{r}
+screenshot.force = TRUE
 visNetwork(nodes, links, width = "100%", height = "600px", main = "Topic Correlations")
 ```
 
