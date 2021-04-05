@@ -108,7 +108,7 @@ This paper provides good insight on advantages of structural topic modeling: htt
 ---
 
 
-<a name="How to Use"></a>
+<a name="How_to_Use"></a>
 
 ## How to Use
 The dataset that was used can be accesed at https://www.yelp.com/dataset  
